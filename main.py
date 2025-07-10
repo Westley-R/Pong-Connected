@@ -1,8 +1,9 @@
+from math import sin, cos, radians, degrees, atan2, isnan
+from PID import PIDController
+
 import pygame as pg
 import numpy as np
 import random
-
-from math import sin, cos, radians, degrees, atan2
 
 pg.init()
 
@@ -37,7 +38,7 @@ def get_dist_from_line(point: np.ndarray, line: np.array) -> float:
     return np.cross(line[1] - line[0], point - line[0]) / np.linalg.norm(line[1] - line[0])
 
 def get_dist_from_line_segment(point: np.ndarray, line: np.array) -> float:
-    segVec = line[1] - line[0]    
+    segVec = line[1] - line[0]
     segLen = np.dot(segVec, segVec)
     projection = 0 if segLen == 0 else np.clip(np.dot(point - line[0], segVec) / segLen, 0, 1)
     return np.linalg.norm(point - (line[0] + projection * segVec))
@@ -68,9 +69,6 @@ def get_intersect(a1: tuple[float, float], a2: tuple[float, float], b1: tuple[fl
     l2 = np.cross(h[2], h[3])
     x, y, z = np.cross(l1, l2)
     
-    if z == 0: 
-        return (float('inf'), float('inf'))
-    
     return (x/z, y/z)
 # End of code snippet!    
     
@@ -87,12 +85,17 @@ if __name__ == "__main__":
     ]
     
     paddles = [
-        {"pos": [50, (h / 2) - (PADDLE_HEIGHT / 2)], "vel": 0, "angle": 0},
-        {"pos": [w - 50, (h / 2) - (PADDLE_HEIGHT / 2)], "vel": 0, "angle": 180}
+        {"pos": [50, (h / 2) - (PADDLE_HEIGHT / 2)], "vel": 0, "angle": 0, "polygon": gen_rect_polygon([50, (h / 2) - (PADDLE_HEIGHT / 2)], PADDLE_WIDTH, PADDLE_HEIGHT, 0)},
+        {"pos": [w - 50, (h / 2) - (PADDLE_HEIGHT / 2)], "vel": 0, "angle": 0, "polygon": gen_rect_polygon([w - 50, (h / 2) - (PADDLE_HEIGHT / 2)], PADDLE_WIDTH, PADDLE_HEIGHT, 180)}
+    ]
+    
+    AIs = [
+        {"paddle": 0, "PID": PIDController(0.1, 0, 0)},
+        {"paddle": 1, "PID": PIDController(0.1, 0, 0)}
     ]
     
     balls = [
-        {"pos": [w / 2, h / 2], "vel": 60, "angle": random.randint(-89, 89)}
+        {"pos": [w / 2, h / 2], "vel": 60, "angle": -60 if random.randint(-1, 1) < 0 else 60}
     ]
     
     keyDict = {}
@@ -118,31 +121,50 @@ if __name__ == "__main__":
         if '\x1b' in keyDict.keys():
             breakFlag = True
             
-        if 'w' in keyDict.keys():
-            paddles[0]["vel"] = max((-30 * dt / 1000) + paddles[0]["vel"], -MAX_VEL)
-        elif 's' in keyDict.keys():
-            paddles[0]["vel"] = min((30 * dt / 1000) + paddles[0]["vel"], MAX_VEL)
-        else:
-            paddles[0]["vel"] = max(abs(paddles[0]["vel"]) - (30 * dt / 1000), 0) * np.sign(paddles[0]["vel"])
+        # if 'w' in keyDict.keys():
+        #     paddles[0]["vel"] = max((-30 * dt / 1000) + paddles[0]["vel"], -MAX_VEL)
+        # elif 's' in keyDict.keys():
+        #     paddles[0]["vel"] = min((30 * dt / 1000) + paddles[0]["vel"], MAX_VEL)
+        # else:
+        #     paddles[0]["vel"] = max(abs(paddles[0]["vel"]) - (30 * dt / 1000), 0) * np.sign(paddles[0]["vel"])
+            
+        for ai in AIs:
+            paddle = paddles[ai["paddle"]]
+            
+            closest = {"ball": 0, "dist": 0}
+            for i in range(len(balls)):
+                dist = get_dist_from_line_segment(np.array(balls[i]["pos"]), np.array(paddle["polygon"][1:3]))
+                if dist < closest["dist"]:
+                    closest = {"ball": i, "dist": dist}
+            
+            ball = balls[closest["ball"]]
+                        
+            target = list(get_intersect(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 1), paddle["angle"], paddle["pos"]), ball["pos"], rotate_point((ball["pos"][0], ball["pos"][1] + 100), ball["angle"], ball["pos"])))
+            paddle["pos"] = target
+            # calc = ai["PID"].calculate(target[1], paddle["pos"][1], dt)
+            # calc = min(abs(calc), 30) * np.sign(calc) # Clamp to 30 to avoid errors
+                
+            # paddle["vel"] = min((calc * dt / 1000) + paddle["vel"], MAX_VEL)
         
         for paddle in paddles:
             paddle["pos"][1] += paddle["vel"]
             
         for ball in balls:
             ball["vel"] = min((15 * dt / 1000) + ball["vel"], MAX_VEL)
-            ball["pos"] = rotate_point([ball["pos"][0] + ball["vel"], ball["pos"][1]], ball["angle"], ball["pos"])
+            ball["pos"] = rotate_point([ball["pos"][0], ball["pos"][1] + ball["vel"]], ball["angle"], ball["pos"])
         
         for wall in walls:
             for ball in balls:
-                if get_dist_from_line(np.array(ball["pos"]), np.array(wall)) > -12:
-                    ball["angle"] = 2 * get_line_angle(wall[0], wall[1]) - ball["angle"]
+                if abs(get_dist_from_line(np.array(ball["pos"]), np.array(wall))) < 12:
+                    ball["angle"] = 2 * get_line_angle(wall[0], wall[1]) - ball["angle"] + 180
                 
             for paddle in paddles:
                 dist = get_dist_from_line(np.array(paddle["pos"]), np.array(wall))
                 if dist > -PADDLE_HEIGHT/2:
-                    paddle["pos"] = list(get_intersect(wall[0], wall[1], paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])))
-                    pos = list(rotate_point((paddle["pos"][0], paddle["pos"][1] + (dist + (PADDLE_HEIGHT+.1 / 2))), paddle["angle"], paddle["pos"]))
-                    neg = list(rotate_point((paddle["pos"][0], paddle["pos"][1] - (dist + (PADDLE_HEIGHT+.1 / 2))), paddle["angle"], paddle["pos"]))
+                    newPos = list(get_intersect(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"]), wall[0], wall[1]))
+                    paddle["pos"] = newPos if not isnan(newPos[0]) and not isnan(newPos[1]) else paddle["pos"]
+                    pos = list(rotate_point((paddle["pos"][0], paddle["pos"][1] + (dist + (PADDLE_HEIGHT+.5 / 2))), paddle["angle"], paddle["pos"]))
+                    neg = list(rotate_point((paddle["pos"][0], paddle["pos"][1] - (dist + (PADDLE_HEIGHT+.5 / 2))), paddle["angle"], paddle["pos"]))
                     paddle["pos"] = pos if get_dist_from_line(np.array(pos), np.array(wall)) < get_dist_from_line(np.array(neg), np.array(wall)) else neg
                     
                     paddle["vel"] = 0
@@ -152,11 +174,17 @@ if __name__ == "__main__":
         
         for ball in balls:
             for paddle in paddles:
-                center = paddle["pos"]
-                paddle_front = np.array(paddle["polygon"][1:3])
-                
-                if abs(get_dist_from_line_segment(np.array(ball["pos"]), paddle_front)) < 12:
-                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"]
+                if abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array(paddle["polygon"][1:3]))) < 12:
+                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
+                    
+                elif abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array([paddle["polygon"][0], paddle["polygon"][3]]))) < 12:
+                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
+                    
+                elif abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array(paddle["polygon"][0:2]))) < 12:
+                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
+                    
+                elif abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array(paddle["polygon"][2:4]))) < 12:
+                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
         
         if breakFlag:
             break
