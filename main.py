@@ -1,58 +1,28 @@
-from math import sin, cos, radians, degrees, atan2, isnan
-from PID import PIDController
-
+from PongLib import *
 import pygame as pg
 import numpy as np
-import random
+import random, os
 
 pg.init()
 
 # USER VARIABLES!!!
-
-# Assuming 1px = 1mm
-MAX_ACCEL = 100 # mm/s sq
-MAX_VEL = 10    # mm/s
+# Note: There are some user vars in Shapes.py
 
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 
 PADDLE_HEIGHT = 100
 PADDLE_WIDTH = 10
+
 BALL_RADIUS = 12
+NUMBER_BALLS = 1 # Somehow, yes, this does work
 
 # END OF USER VARIABLES!!!
 
-# Chaos pong: 2 pong balls, going different directions; 4 players
+# Idea; Chaos pong: 2 pong balls, going different directions; 4 players
 
-# This code snippet was grabbed from my Python Raytracing project @ <https://github.com/Westley-R/Python-Raytracing/tree/main/dev/2d%20rotation/main.py> lines 4-10
-# I find its easier to create functions to do vector math for me, then work with "vectors" instead of X, Y cordinate pairs.
-def rotate_point(point: tuple[float, float], angle: float, center_point: tuple[float, float] = (0, 0)) -> tuple[float, float]:
-    angle_rad = radians(angle % 360)
-    new_point = (point[0] - center_point[0], point[1] - center_point[1])
-    new_point = (new_point[0] * cos(angle_rad) - new_point[1] * sin(angle_rad),
-                 new_point[0] * sin(angle_rad) + new_point[1] * cos(angle_rad))
-    new_point = (new_point[0] + center_point[0], new_point[1] + center_point[1])
-    return new_point
-
-def get_dist_from_line(point: np.ndarray, line: np.array) -> float:
-    return np.cross(line[1] - line[0], point - line[0]) / np.linalg.norm(line[1] - line[0])
-
-def get_dist_from_line_segment(point: np.ndarray, line: np.array) -> float:
-    segVec = line[1] - line[0]
-    segLen = np.dot(segVec, segVec)
-    projection = 0 if segLen == 0 else np.clip(np.dot(point - line[0], segVec) / segLen, 0, 1)
-    return np.linalg.norm(point - (line[0] + projection * segVec))
-
-def get_line_angle(p1: np.ndarray, p2: np.ndarray) -> float:
-    return abs(degrees(atan2(p2[1] - p1[1], p2[0] - p1[0])) % 360)
-
-def gen_rect_polygon(center: tuple[float, float], width: int, height: int, rotation: float = 0) -> list:
-    return [
-        rotate_point((center[0] - width/2, center[1] - height/2), rotation, center),
-        rotate_point((center[0] + width/2, center[1] - height/2), rotation, center),
-        rotate_point((center[0] + width/2, center[1] + height/2), rotation, center),
-        rotate_point((center[0] - width/2, center[1] + height/2), rotation, center)
-    ]
+def distance_point_line(pt: pg.Vector2, l1: pg.Vector2, l2: pg.Vector2):
+    return abs(pg.Vector2(l1[1] - l2[1], l2[0] - l1[0]).normalize().dot(pt - l1))
 
 # Made using https://stackoverflow.com/questions/3252194/numpy-and-line-intersections 2nd top answer (honestly, I just dont understand vector math all that much)
 def get_intersect(a1: tuple[float, float], a2: tuple[float, float], b1: tuple[float, float], b2: tuple[float, float]) -> tuple[float, float]:
@@ -70,40 +40,31 @@ def get_intersect(a1: tuple[float, float], a2: tuple[float, float], b1: tuple[fl
     x, y, z = np.cross(l1, l2)
     
     return (x/z, y/z)
-# End of code snippet!    
-    
-if __name__ == "__main__":
-    w, h = (SCREEN_WIDTH, SCREEN_HEIGHT)
-    screen = pg.display.set_mode((w, h))
-    clock = pg.time.Clock()
-    
-    walls = [
-        [(0, 0), (0, h)],
-        [(0, h), (w, h)],
-        [(w, h), (w, 0)],
-        [(w, 0), (0, 0)]
-    ]
+# End of code snippet!
+
+def game(screen: pg.Surface, clock: pg.time.Clock):
+    w, h = screen.get_width(), screen.get_height()
     
     paddles = [
-        {"pos": [50, (h / 2) - (PADDLE_HEIGHT / 2)], "vel": 0, "angle": 0, "polygon": gen_rect_polygon([50, (h / 2) - (PADDLE_HEIGHT / 2)], PADDLE_WIDTH, PADDLE_HEIGHT, 0)},
-        {"pos": [w - 50, (h / 2) - (PADDLE_HEIGHT / 2)], "vel": 0, "angle": 0, "polygon": gen_rect_polygon([w - 50, (h / 2) - (PADDLE_HEIGHT / 2)], PADDLE_WIDTH, PADDLE_HEIGHT, 180)}
+        Paddle(pg.Rect(50, (h / 2) - (PADDLE_HEIGHT / 2), PADDLE_WIDTH, PADDLE_HEIGHT)),
+        Paddle(pg.Rect(w - (50 + PADDLE_WIDTH), (h / 2) - (PADDLE_HEIGHT / 2), PADDLE_WIDTH, PADDLE_HEIGHT), flip=True)
     ]
     
-    AIs = [
-        {"paddle": 0, "PID": PIDController(0.1, 0, 0)},
-        {"paddle": 1, "PID": PIDController(0.1, 0, 0)}
-    ]
+    bots = [1] # For use later, when I eventually get more than 2 paddles working properly
+    # The goal is to dynamically create a shape that works with whatever number of paddles is set, then create some control scheme that works with all of those paddles
+    # (I'll probable just add controller support and do 1 paddle per controller)
     
-    balls = [
-        {"pos": [w / 2, h / 2], "vel": 60, "angle": -60 if random.randint(-1, 1) < 0 else 60}
-    ]
+    balls = [Ball(pg.math.Vector2(w/2, h/2), 12, 5, random.randrange(30, 150, 5) * (-1 if random.randint(0, 1) else 1)) for i in range(NUMBER_BALLS)]
     
     keyDict = {}
+    
+    p1ScoreDisp = TextBox(pg.font.Font(None, 60), str(0), pg.Vector2(80, 50), box_color=pg.Color("Black"))
+    p2ScoreDisp = TextBox(pg.font.Font(None, 60), str(0), pg.Vector2(w-80, 50), box_color=pg.Color("Black"))
+    p1Score = 0
+    p2Score = 0
 
     while True:
-        screen.fill("black")
         breakFlag = False
-        
         dt = clock.tick(60)
 
         for event in pg.event.get():
@@ -120,80 +81,159 @@ if __name__ == "__main__":
         
         if '\x1b' in keyDict.keys():
             breakFlag = True
-            
-        # if 'w' in keyDict.keys():
-        #     paddles[0]["vel"] = max((-30 * dt / 1000) + paddles[0]["vel"], -MAX_VEL)
-        # elif 's' in keyDict.keys():
-        #     paddles[0]["vel"] = min((30 * dt / 1000) + paddles[0]["vel"], MAX_VEL)
-        # else:
-        #     paddles[0]["vel"] = max(abs(paddles[0]["vel"]) - (30 * dt / 1000), 0) * np.sign(paddles[0]["vel"])
-            
-        for ai in AIs:
-            paddle = paddles[ai["paddle"]]
-            
-            closest = {"ball": 0, "dist": 0}
-            for i in range(len(balls)):
-                dist = get_dist_from_line_segment(np.array(balls[i]["pos"]), np.array(paddle["polygon"][1:3]))
-                if dist < closest["dist"]:
-                    closest = {"ball": i, "dist": dist}
-            
-            ball = balls[closest["ball"]]
-                        
-            target = list(get_intersect(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 1), paddle["angle"], paddle["pos"]), ball["pos"], rotate_point((ball["pos"][0], ball["pos"][1] + 100), ball["angle"], ball["pos"])))
-            paddle["pos"] = target
-            # calc = ai["PID"].calculate(target[1], paddle["pos"][1], dt)
-            # calc = min(abs(calc), 30) * np.sign(calc) # Clamp to 30 to avoid errors
-                
-            # paddle["vel"] = min((calc * dt / 1000) + paddle["vel"], MAX_VEL)
         
-        for paddle in paddles:
-            paddle["pos"][1] += paddle["vel"]
+        for i in range(len(paddles)):
+            if i not in bots:
+                paddles[i].update(screen, keyDict, dt)
             
-        for ball in balls:
-            ball["vel"] = min((15 * dt / 1000) + ball["vel"], MAX_VEL)
-            ball["pos"] = rotate_point([ball["pos"][0], ball["pos"][1] + ball["vel"]], ball["angle"], ball["pos"])
-        
-        for wall in walls:
+        for botNum in bots:
+            paddle = paddles[botNum]
+            
+            closest = {"ball": balls[0], "dist": np.inf}
             for ball in balls:
-                if abs(get_dist_from_line(np.array(ball["pos"]), np.array(wall))) < 12:
-                    ball["angle"] = 2 * get_line_angle(wall[0], wall[1]) - ball["angle"] + 180
-                
-            for paddle in paddles:
-                dist = get_dist_from_line(np.array(paddle["pos"]), np.array(wall))
-                if dist > -PADDLE_HEIGHT/2:
-                    newPos = list(get_intersect(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"]), wall[0], wall[1]))
-                    paddle["pos"] = newPos if not isnan(newPos[0]) and not isnan(newPos[1]) else paddle["pos"]
-                    pos = list(rotate_point((paddle["pos"][0], paddle["pos"][1] + (dist + (PADDLE_HEIGHT+.5 / 2))), paddle["angle"], paddle["pos"]))
-                    neg = list(rotate_point((paddle["pos"][0], paddle["pos"][1] - (dist + (PADDLE_HEIGHT+.5 / 2))), paddle["angle"], paddle["pos"]))
-                    paddle["pos"] = pos if get_dist_from_line(np.array(pos), np.array(wall)) < get_dist_from_line(np.array(neg), np.array(wall)) else neg
-                    
-                    paddle["vel"] = 0
-        
-        for paddle in paddles:
-            paddle["polygon"] = gen_rect_polygon(paddle["pos"], PADDLE_WIDTH, PADDLE_HEIGHT, paddle["angle"])
-        
+                dist = distance_point_line(ball.getCenter(), paddle.getRect().midtop, paddle.getRect().midbottom)
+                newdist = distance_point_line(ball.getCenter() + ball.getTrajectory(), paddle.getRect().midtop, paddle.getRect().midbottom)
+                if dist < closest["dist"] and dist > newdist:
+                    closest = {"ball": ball, "dist": dist}
+            
+            ball = closest["ball"]
+
+            target = get_intersect(paddle.getRect().midtop, paddle.getRect().midbottom, ball.getCenter(), ball.getCenter() + ball.getTrajectory())
+            if target[1] + (PADDLE_HEIGHT/3) < paddle.getRect().centery:
+                paddle.update(screen, {"w": 0}, dt)
+            elif target[1] - (PADDLE_HEIGHT/3) > paddle.getRect().centery:
+                paddle.update(screen, {"s": 0}, dt)
+            else:
+                paddle.update(screen, {}, dt)
+            
         for ball in balls:
             for paddle in paddles:
-                if abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array(paddle["polygon"][1:3]))) < 12:
-                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
-                    
-                elif abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array([paddle["polygon"][0], paddle["polygon"][3]]))) < 12:
-                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
-                    
-                elif abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array(paddle["polygon"][0:2]))) < 12:
-                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
-                    
-                elif abs(get_dist_from_line_segment(np.array(ball["pos"]), np.array(paddle["polygon"][2:4]))) < 12:
-                    ball["angle"] = 2 * get_line_angle(paddle["pos"], rotate_point((paddle["pos"][0], paddle["pos"][1] + 10), paddle["angle"], paddle["pos"])) - ball["angle"] + 180
+                ball.collidepaddle(screen, paddle)
+            
+            clampRect = screen.get_rect().inflate(-24, -24)
+            if max(clampRect.top, min(clampRect.bottom, ball.getCenter().y)) != ball.getCenter().y:
+                ball.setTrajectory(ball.getTrajectory().reflect((0, 1)))
+            
+            elif min(clampRect.right, ball.getCenter().x) != ball.getCenter().x:
+                p1Score += 1
+                ball.setCenter(pg.math.Vector2(w/2, h/2))
+                ball.setTrajectory(pg.math.Vector2(0, 5).rotate(random.randrange(30, 150, 5) * (-1 if random.randint(0, 1) else 1)))
+            elif max(clampRect.left, min(clampRect.right, ball.getCenter().x)) != ball.getCenter().x:
+                p2Score += 1
+                ball.setCenter(pg.math.Vector2(w/2, h/2))
+                ball.setTrajectory(pg.math.Vector2(0, 5).rotate(random.randrange(30, 150, 5) * (-1 if random.randint(0, 1) else 1)))
+
+            ball.update(dt)
         
         if breakFlag:
             break
             
+        screen.fill("black")
         for paddle in paddles:
-            pg.draw.polygon(screen, "white", paddle["polygon"])
+            paddle.draw(screen, "white")
         for ball in balls:
-            pg.draw.circle(screen, "white", tuple(ball["pos"]), 12)
+            ball.draw(screen, "white")
+        
+        p1ScoreDisp.setText(str(p1Score))
+        p2ScoreDisp.setText(str(p2Score))
+        
+        p1ScoreDisp.draw(screen)
+        p2ScoreDisp.draw(screen)
         
         pg.display.update()
+        
+    return p1Score, p2Score
+    
+def mainMenu(screen: pg.Surface, clock: pg.time.Clock):
+    w, h = screen.get_width(), screen.get_height()
+    nameInput = TextInput(pg.font.Font(None, 32), "NAME", pg.Vector2(w/2, (h/2) - 20))
+    startButton = Button(pg.font.Font(None, 32), "START", pg.Vector2(w/2, h/2 + 20))
+    
+    breakFlag = False
+    name = None
+
+    while True:
+        dt = clock.tick(60)
+
+        for event in pg.event.get():
+            nameInput.handle_event(event)
+            startButton.handle_event(event)
+            
+            match event.type:
+                case pg.QUIT:
+                    breakFlag = True
+                case pg.KEYDOWN:
+                    if event.dict['unicode'] == '\x1b':
+                        breakFlag = True
+        
+        if breakFlag:
+            break
+        
+        if startButton.getPressed():
+            name = nameInput.getText() if nameInput.getText() != "" else "Player1"
+            break
+            
+        screen.fill("black")
+        nameInput.draw(screen)
+        startButton.draw(screen)
+        
+        pg.display.update()
+        
+    return name
+
+def saveScreen(screen: pg.Surface, clock: pg.time.Clock, name: str, p1Score: int, p2Score: int):
+    w, h = screen.get_width(), screen.get_height()
+    nameInput = TextBox(pg.font.Font(None, 32), "Would you like to save your score?", pg.Vector2(w/2, (h/2) - 20), box_color=pg.Color("black"))
+    
+    yes = Button(pg.font.Font(None, 32), "YES", pg.Vector2(w/2, h/2 + 20))
+    yes._rect.midright = yes._rect.center - pg.Vector2(5, 0)
+    
+    no = Button(pg.font.Font(None, 32), "NO", pg.Vector2(w/2, h/2 + 20))
+    no._rect.midleft = no._rect.center + pg.Vector2(5, 0)
+    
+    breakFlag = False
+
+    while True:
+        dt = clock.tick(60)
+
+        for event in pg.event.get():
+            yes.handle_event(event)
+            no.handle_event(event)
+            
+            match event.type:
+                case pg.QUIT:
+                    breakFlag = True
+                case pg.KEYDOWN:
+                    if event.dict['unicode'] == '\x1b':
+                        breakFlag = True
+        
+        if breakFlag or no.getPressed():
+            break
+        
+        if yes.getPressed():
+            if not os.path.exists("leaderboard.csv"):
+                with open("leaderboard.csv", "w") as file:
+                    file.write("name,P1Score,P2Score,P1/P2")
+            with open("leaderboard.csv", "a") as file:
+                file.write(f"\n{name},{p1Score},{p2Score},{p1Score/p2Score if (p1Score != 0 and p2Score != 0) else 0}")
+            break
+            
+        screen.fill("black")
+        nameInput.draw(screen)
+        yes.draw(screen)
+        no.draw(screen)
+        
+        pg.display.update()
+        
+    return name
+
+if __name__ == "__main__":
+    screen = pg.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    clock = pg.time.Clock()
+    
+    name = mainMenu(screen, clock)
+    if name is not None:
+        p1, p2 = game(screen, clock)
+        saveScreen(screen, clock, name, p1, p2)
 
     pg.quit()
